@@ -1,7 +1,9 @@
 --[[--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--
--- Dynamic Sudden v0.1
+-- Dynamic Sudden v0.2
 -- 
--- Cmod is replaced with Mmod + a dynamically changing amount of Sudden.
+-- The Sudden option in Uncommon Modifiers is replaced with a dynamically
+-- changing amount of Sudden, chosen instantaneously to keep the time interval
+-- between the receptors and the sudden horizon constant.
 --
 -- Current limitations:
 --      Won't play nicely with speed/scroll rates
@@ -24,7 +26,6 @@
 --||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--]]--
 local t = {}
 
-local DynamicSuddenDemoMode = false -- Choose whether to replace CMod or MMod.
 local DynamicSuddenActive = {}
 local DynamicSuddenEffectiveTime = {}
 local DynamicSuddenConversionFactor = {}
@@ -46,8 +47,8 @@ local CalculateDynamicSuddenConstants = function(player)
     local MusicRate = SL.Global.ActiveModifiers.MusicRate or 1
 
     local SpeedModType = SL[pn].ActiveModifiers.SpeedModType
-    DynamicSuddenActive[player] = (SpeedModType == (DynamicSuddenDemoMode and "M" or "C"))
-    if not DynamicSuddenActive[player] then
+    if SpeedModType == "C" then
+        pops:Sudden(0, 1000000) -- You probably have Sudden set and don't want it?
         return {}
     end
     local SpeedMod = SL[pn].ActiveModifiers.SpeedMod
@@ -56,9 +57,7 @@ local CalculateDynamicSuddenConstants = function(player)
     if not (bpms and bpms[1] and bpms[2]) then
         return {}
     end
-    local EffectiveSpeedMod = SpeedMod / bpms[2]
-    pops:XMod(EffectiveSpeedMod, 1000000)
-    pops:Sudden(1, 1000000)
+    local EffectiveSpeedMod = (SpeedModType == "X") and SpeedMod or (SpeedMod / bpms[2])
 
     -- Calculating SuddenOffset:
     -- #define CENTER_LINE_Y 160	// from fYOffset == 0
@@ -138,20 +137,61 @@ local SuddenUpdater = function(af)
     end
 end
 
-t["ScreenSelectMusic"] = Def.ActorFrame {
-    ModuleCommand = function(self)
-        self:SetUpdateFunction(nil)
-    end
-}
-
 t["ScreenGameplay"] = Def.ActorFrame {
     ModuleCommand = function(self)
         DynamicSuddenActive = {}
         DynamicSuddenEffectiveTime = {}
         DynamicSuddenConversionFactor = {}
         DynamicSuddenReported = false
+        for PlayerNumber in ivalues(GAMESTATE:GetEnabledPlayers()) do
+            -- Substitute if Sudden was selected at the options screen and we're not on CMod.
+            DynamicSuddenActive[PlayerNumber] = (
+                GAMESTATE:GetPlayerState(PlayerNumber):GetPlayerOptions("ModsLevel_Preferred"):Sudden() > 0.5
+            ) and (
+                SL[ToEnumShortString(PlayerNumber)].ActiveModifiers.SpeedModType ~= "C"
+            )
+        end
         self:SetUpdateFunction(SuddenUpdater)
     end
 }
+
+local ReviseOptionText = Def.ActorFrame {
+    ModuleCommand = function(self)
+        local ScreenOptions = SCREENMAN:GetTopScreen()
+        if not ScreenOptions or not ScreenOptions.GetNumRows then return end
+        local num_rows = ScreenOptions:GetNumRows()
+        
+        -- OptionRows on ScreenOptions are 0-indexed, so start counting from 0
+        for i=0,num_rows-1 do
+            local OptionRow = ScreenOptions:GetOptionRow(i)
+            if OptionRow:GetName() == "Appearance" then
+                local num_choices = OptionRow:GetNumChoices()
+                for i=1,num_choices do
+                    local ch = OptionRow:GetChild(""):GetChild("Item")[i]
+                    if ch:GetText() == "Sudden" then
+                        ch:settext("Dynamic\nSudden")
+                          :vertspacing(-6)
+                          :zoomy(0.6)
+                          :addy(-3)
+                        break
+                    end
+                end
+                break
+            end
+        end
+    end
+}
+
+t["ScreenPlayerOptions"] = ReviseOptionText
+t["ScreenPlayerOptions2"] = ReviseOptionText
+t["ScreenPlayerOptions3"] = ReviseOptionText
+
+local DisableUpdater = Def.ActorFrame {
+    ModuleCommand = function(self)
+        self:SetUpdateFunction(nil)
+    end
+}
+t["ScreenSelectMusic"] = DisableUpdater
+t["ScreenEvaluation"] = DisableUpdater
 
 return t
