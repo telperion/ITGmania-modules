@@ -26,8 +26,10 @@
 local t = {}
 
 local DynamicSuddenDemoMode = false
+local DynamicSuddenActive = {}
 local DynamicSuddenEffectiveTime = {}
 local DynamicSuddenConversionFactor = {}
+local DynamicSuddenReported = false
 
 local CalculateDynamicSuddenConstants = function(player)
 	player   = player or GAMESTATE:GetMasterPlayerNumber()
@@ -41,7 +43,8 @@ local CalculateDynamicSuddenConstants = function(player)
 	local MusicRate    = SL.Global.ActiveModifiers.MusicRate or 1
 
 	local SpeedModType = SL[pn].ActiveModifiers.SpeedModType
-    if not (SpeedModType == (DynamicSuddenDemoMode and "M" or "C")) then return {} end
+    DynamicSuddenActive[player] = (SpeedModType == (DynamicSuddenDemoMode and "M" or "C")) 
+    if not DynamicSuddenActive[player] then return {} end
 	local SpeedMod     = SL[pn].ActiveModifiers.SpeedMod
 
 	local bpms = GetDisplayBPMs(player, Steps, MusicRate)
@@ -92,9 +95,12 @@ local CalculateDynamicSuddenConstants = function(player)
 end
 
 local SuddenUpdater = function(af)
-    for PlayerNumber in ivalues(GAMESTATE:GetHumanPlayers()) do
+    local all_dynamic_calculated = true
+    local needs_reporting = false
+    for PlayerNumber in ivalues(GAMESTATE:GetEnabledPlayers()) do
         local pn = ToEnumShortString(PlayerNumber)
         if DynamicSuddenEffectiveTime[PlayerNumber] then
+            needs_reporting = true
             local Steps = GAMESTATE:GetCurrentSteps(PlayerNumber)
             if not Steps then return end
             local TimingData = Steps:GetTimingData()
@@ -108,8 +114,21 @@ local SuddenUpdater = function(af)
             pops:SuddenOffset(vertical_in_centerline_units - 1, 1000000)
             --Trace("### "..tostring(time).." sec., "..tostring(beat).." beats, "..tostring(horizon).." futurebeat, "..tostring(vertical_in_centerline_units-1).." shift")
         else
+            if DynamicSuddenActive[PlayerNumber] then
+                all_dynamic_calculated = false
+            end
             CalculateDynamicSuddenConstants(PlayerNumber)
         end
+    end
+    if all_dynamic_calculated and needs_reporting and not DynamicSuddenReported then
+        local report_message = "DynamicSudden active: "
+        for PlayerNumber in ivalues(GAMESTATE:GetEnabledPlayers()) do
+            if DynamicSuddenActive[PlayerNumber] then
+                report_message = report_message .. ToEnumShortString(PlayerNumber) .. "=" .. string.format("%0.f", DynamicSuddenEffectiveTime[PlayerNumber] * 1000) .. "ms "
+            end
+        end
+        SCREENMAN:SystemMessage(report_message)
+        DynamicSuddenReported = true
     end
 end
 
@@ -121,9 +140,10 @@ t["ScreenSelectMusic"] = Def.ActorFrame {
 
 t["ScreenGameplay"] = Def.ActorFrame {
     ModuleCommand=function(self)
-        SCREENMAN:SystemMessage("DynamicSudden active!")
+        DynamicSuddenActive = {}
         DynamicSuddenEffectiveTime = {}
         DynamicSuddenConversionFactor = {}
+        DynamicSuddenReported = false
         self:SetUpdateFunction(SuddenUpdater)
     end
 }
