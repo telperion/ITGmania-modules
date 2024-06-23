@@ -6,6 +6,7 @@
 -- Current limitations:
 --      Won't play nicely with speed/scroll rates
 --      Won't play nicely with some mods/FX files
+--      Won't play nicely with SSC split timing (sorry, no A4A)
 --
 -- Copyright (c) 2024 Telperion
 --
@@ -87,7 +88,7 @@ local CalculateDynamicSuddenConstants = function(player)
     local beats_on_screen = _TOTAL_Y_DISTANCE / arrow_height
     DynamicSuddenEffectiveTime[player] = beats_on_screen * (60 / bpms[2])
     DynamicSuddenConversionFactor[player] = arrow_height / _CENTER_LINE_Y
-    Trace("### " .. player .. ": " .. tostring(DynamicSuddenEffectiveTime[player]) .. " sec.")
+    --Trace("### " .. player .. ": " .. tostring(DynamicSuddenEffectiveTime[player]) .. " sec.")
 end
 
 local SuddenUpdater = function(af)
@@ -105,7 +106,7 @@ local SuddenUpdater = function(af)
             local vertical_in_centerline_units = (horizon - beat) * DynamicSuddenConversionFactor[PlayerNumber]
             if (vertical_in_centerline_units < 0) then return end
             pops:SuddenOffset(vertical_in_centerline_units - 1, 1000000)
-            Trace("### "..tostring(time).." sec., "..tostring(beat).." beats, "..tostring(horizon).." futurebeat, "..tostring(vertical_in_centerline_units-1).." shift")
+            --Trace("### "..tostring(time).." sec., "..tostring(beat).." beats, "..tostring(horizon).." futurebeat, "..tostring(vertical_in_centerline_units-1).." shift")
         else
             CalculateDynamicSuddenConstants(PlayerNumber)
         end
