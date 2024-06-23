@@ -24,7 +24,7 @@
 --||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--]]--
 local t = {}
 
-local DynamicSuddenDemoMode = false
+local DynamicSuddenDemoMode = false -- Choose whether to replace CMod or MMod.
 local DynamicSuddenActive = {}
 local DynamicSuddenEffectiveTime = {}
 local DynamicSuddenConversionFactor = {}
