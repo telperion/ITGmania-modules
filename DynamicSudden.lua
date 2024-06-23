@@ -1,6 +1,8 @@
 --[[--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--
 -- Dynamic Sudden v0.1
 -- 
+-- Cmod is replaced with Mmod + a dynamically changing amount of Sudden.
+--
 -- Current limitations:
 --      Won't play nicely with speed/scroll rates
 --      Won't play nicely with some mods/FX files
@@ -23,12 +25,12 @@
 local t = {}
 
 local DynamicSuddenUpdateTable = {}
-local ApproachSpeed = 4000
-local LastCheckedTime = nil
+local DynamicSuddenDemoMode = true
 
 local TabulateDynamicSuddenUpdates = function(player)
 	player   = player or GAMESTATE:GetMasterPlayerNumber()
 	local pn = ToEnumShortString(player)
+    local pops = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Song")
 
     -- Dunno how to do this for course mode yet.
     if GAMESTATE:IsCourseMode() then return {} end
@@ -37,11 +39,14 @@ local TabulateDynamicSuddenUpdates = function(player)
 	local MusicRate    = SL.Global.ActiveModifiers.MusicRate or 1
 
 	local SpeedModType = SL[pn].ActiveModifiers.SpeedModType
+    if not (SpeedModType == (DynamicSuddenDemoMode and "M" or "C")) then return {} end
 	local SpeedMod     = SL[pn].ActiveModifiers.SpeedMod
 
 	local bpms = GetDisplayBPMs(player, Steps, MusicRate)
 	if not (bpms and bpms[1] and bpms[2]) then return {} end
-    local EffectiveSpeedMod = (SpeedModType=="X") and SpeedMod or (SpeedMod / bpms[2])
+    local EffectiveSpeedMod = SpeedMod / bpms[2]
+    pops:XMod(EffectiveSpeedMod, 1000000)
+    pops:Sudden(1, 1000000)
 
     -- Parse timing data.
     local TimingData = Steps:GetTimingData()
@@ -53,7 +58,6 @@ local TabulateDynamicSuddenUpdates = function(player)
         TimesToBPMs[#TimesToBPMs+1] = {TimingData:GetElapsedTimeFromBeat(bt[1]) * MusicRate, bt[2]}
     end
     
-    local so = GAMESTATE:GetSongOptionsObject("ModsLevel_Song")
 	local DynamicSuddenTime = SL[pn].ActiveModifiers.DynamicSuddenTime
     if not DynamicSuddenTime then return {} end
     if DynamicSuddenTime < 0 then return {} end
@@ -82,18 +86,26 @@ local TabulateDynamicSuddenUpdates = function(player)
     -- Default value for sudden offset is 0.
     local _CENTER_LINE_Y = 160
     local _ARROW_SPACING = 64
-    local mini = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Song"):Mini()
+    local _TOTAL_Y_DISTANCE = SCREEN_CENTER_Y + (pops:Reverse()
+        and (-SL[pn].ActiveModifiers.NoteFieldOffsetY + THEME:GetMetric("Player", "ReceptorArrowsYReverse"))
+        or (SL[pn].ActiveModifiers.NoteFieldOffsetY - THEME:GetMetric("Player", "ReceptorArrowsYStandard"))
+    )
+    local beats_on_screen = _TOTAL_Y_DISTANCE / _ARROW_SPACING / EffectiveSpeedMod
+    Trace("### " .. tostring(_TOTAL_Y_DISTANCE))
+    local mini = pops:Mini()
     local center_line = _CENTER_LINE_Y / (1 - mini * 0.5)
-    local arrows_per_centerline_unit = center_line / _ARROW_SPACING
-    local beats_per_centerline_unit = arrows_per_centerline_unit / EffectiveSpeedMod
     local last_sudden_offset = nil
     local DynamicSuddenChanges = {}
+    local adjusted_time = 0
+    local sudden_offset = 0
+    local approach_rate = 1000000
     for bt in ivalues(TimesToBPMs) do
-        local seconds_per_centerline_unit = (60 / bt[2]) * beats_per_centerline_unit
-        local sudden_scaling_required = DynamicSuddenTime / seconds_per_centerline_unit
-        local adjusted_time = bt[1] - DynamicSuddenTime
-        local sudden_offset = sudden_scaling_required - 1
-        local approach_rate = 1000000
+        local seconds_on_screen = (60 / bt[2]) * beats_on_screen
+        local proportion_of_vertical = DynamicSuddenTime / seconds_on_screen
+        local vertical_in_centerline_units = proportion_of_vertical * _TOTAL_Y_DISTANCE / center_line
+        adjusted_time = bt[1] - DynamicSuddenTime
+        sudden_offset = vertical_in_centerline_units - 1
+        approach_rate = 1000000
         if last_sudden_offset then
             approach_rate = math.abs(sudden_offset - last_sudden_offset) / DynamicSuddenTime
         end
@@ -101,6 +113,7 @@ local TabulateDynamicSuddenUpdates = function(player)
         last_sudden_offset = sudden_offset
         Trace("### " .. player .. ": " .. tostring(adjusted_time) .. ", " .. tostring(sudden_offset) .. " (" .. tostring(bt[2]) .. ") ")
     end
+    DynamicSuddenChanges[#DynamicSuddenChanges+1] = {math.huge, sudden_offset, approach_rate}
     return DynamicSuddenChanges
 end
 
@@ -125,14 +138,12 @@ local SuddenUpdater = function(af)
             for test_point in ivalues(DynamicSuddenUpdateTable[PlayerNumber]) do
                 if time < test_point[1] then
                     local update_point = rolling_point or test_point
-                    pops:Sudden(1, 1000000)
                     pops:SuddenOffset(update_point[2], update_point[3])
                     --Trace("### " .. PlayerNumber .. " @ " .. tostring(time) .. ": " .. tostring(update_point[1]) .. ", " .. tostring(update_point[2]) .. ") ")               
                     break
                 end
                 rolling_point = test_point
             end
-            LastCheckedTime = time
         end
     end
 end
@@ -140,12 +151,6 @@ end
 t["ScreenSelectMusic"] = Def.ActorFrame {
     ModuleCommand=function(self)
         self:SetUpdateFunction(nil)
-        for PlayerNumber in ivalues(GAMESTATE:GetHumanPlayers()) do
-            local pn = ToEnumShortString(PlayerNumber)
-            SL[pn].ActiveModifiers.DynamicSuddenTime = 1.000
-            LastCheckedTime = nil
-            SCREENMAN:SystemMessage("Set DynamicSudden time for " .. PlayerNumber .. " to " .. tostring(SL[pn].ActiveModifiers.DynamicSuddenTime))
-        end
     end
 }
 
@@ -154,7 +159,7 @@ t["ScreenGameplay"] = Def.ActorFrame {
         SCREENMAN:SystemMessage("DynamicSudden active!")
         DynamicSuddenUpdateTable = {}
         self:SetUpdateFunction(SuddenUpdater)
-    end,
+    end
 }
 
 
