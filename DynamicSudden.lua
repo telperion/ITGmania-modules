@@ -24,10 +24,11 @@
 
 local t = {}
 
-local DynamicSuddenUpdateTable = {}
-local DynamicSuddenDemoMode = true
+local DynamicSuddenDemoMode = false
+local DynamicSuddenEffectiveTime = {}
+local DynamicSuddenConversionFactor = {}
 
-local TabulateDynamicSuddenUpdates = function(player)
+local CalculateDynamicSuddenConstants = function(player)
 	player   = player or GAMESTATE:GetMasterPlayerNumber()
 	local pn = ToEnumShortString(player)
     local pops = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Song")
@@ -57,15 +58,6 @@ local TabulateDynamicSuddenUpdates = function(player)
         -- For that, we need the actual times of application, not the beat numbers.
         TimesToBPMs[#TimesToBPMs+1] = {TimingData:GetElapsedTimeFromBeat(bt[1]) * MusicRate, bt[2]}
     end
-    
-	local DynamicSuddenTime = SL[pn].ActiveModifiers.DynamicSuddenTime
-    if not DynamicSuddenTime then return {} end
-    if DynamicSuddenTime < 0 then return {} end
-    if DynamicSuddenTime > 10 then return {} end
-
-    -- Set up a mods table of dynamic sudden updates to be applied.
-    -- [1]: application time
-    -- [2]: SuddenOffset value
 
     -- Calculating SuddenOffset:
         -- #define CENTER_LINE_Y 160	// from fYOffset == 0
@@ -90,60 +82,32 @@ local TabulateDynamicSuddenUpdates = function(player)
         and (-SL[pn].ActiveModifiers.NoteFieldOffsetY + THEME:GetMetric("Player", "ReceptorArrowsYReverse"))
         or (SL[pn].ActiveModifiers.NoteFieldOffsetY - THEME:GetMetric("Player", "ReceptorArrowsYStandard"))
     )
-    local beats_on_screen = _TOTAL_Y_DISTANCE / _ARROW_SPACING / EffectiveSpeedMod
-    Trace("### " .. tostring(_TOTAL_Y_DISTANCE))
     local mini = pops:Mini()
-    local center_line = _CENTER_LINE_Y / (1 - mini * 0.5)
-    local last_sudden_offset = nil
-    local DynamicSuddenChanges = {}
-    local adjusted_time = 0
-    local sudden_offset = 0
-    local approach_rate = 1000000
-    for bt in ivalues(TimesToBPMs) do
-        local seconds_on_screen = (60 / bt[2]) * beats_on_screen
-        local proportion_of_vertical = DynamicSuddenTime / seconds_on_screen
-        local vertical_in_centerline_units = proportion_of_vertical * _TOTAL_Y_DISTANCE / center_line
-        adjusted_time = bt[1] - DynamicSuddenTime
-        sudden_offset = vertical_in_centerline_units - 1
-        approach_rate = 1000000
-        if last_sudden_offset then
-            approach_rate = math.abs(sudden_offset - last_sudden_offset) / DynamicSuddenTime
-        end
-        DynamicSuddenChanges[#DynamicSuddenChanges+1] = {adjusted_time, sudden_offset, approach_rate}
-        last_sudden_offset = sudden_offset
-        Trace("### " .. player .. ": " .. tostring(adjusted_time) .. ", " .. tostring(sudden_offset) .. " (" .. tostring(bt[2]) .. ") ")
-    end
-    DynamicSuddenChanges[#DynamicSuddenChanges+1] = {math.huge, sudden_offset, approach_rate}
-    return DynamicSuddenChanges
+    local arrow_height = _ARROW_SPACING * EffectiveSpeedMod * (1 - mini * 0.5)
+    local beats_on_screen = _TOTAL_Y_DISTANCE / arrow_height
+    DynamicSuddenEffectiveTime[player] = beats_on_screen * (60 / bpms[2])
+    DynamicSuddenConversionFactor[player] = arrow_height / _CENTER_LINE_Y
+    Trace("### " .. player .. ": " .. tostring(DynamicSuddenEffectiveTime[player]) .. " sec.")
 end
 
 local SuddenUpdater = function(af)
     for PlayerNumber in ivalues(GAMESTATE:GetHumanPlayers()) do
         local pn = ToEnumShortString(PlayerNumber)
-        local DynamicSuddenTime = SL[pn].ActiveModifiers.DynamicSuddenTime
-        if DynamicSuddenTime then
-            local recalc = true
-            if DynamicSuddenUpdateTable[PlayerNumber] then
-                if #DynamicSuddenUpdateTable[PlayerNumber] > 0 then
-                    recalc = false
-                end
-            end
-            if recalc then
-                DynamicSuddenUpdateTable[PlayerNumber] = TabulateDynamicSuddenUpdates(PlayerNumber)
-            end
-
-            local time = GAMESTATE:GetSongPosition():GetMusicSeconds()
+        if DynamicSuddenEffectiveTime[PlayerNumber] then
+            local Steps = GAMESTATE:GetCurrentSteps(PlayerNumber)
+            if not Steps then return end
+            local TimingData = Steps:GetTimingData()
+            if not TimingData then return end
             local pops = GAMESTATE:GetPlayerState(PlayerNumber):GetPlayerOptions("ModsLevel_Song")
-            local rolling_point = nil
-            for test_point in ivalues(DynamicSuddenUpdateTable[PlayerNumber]) do
-                if time < test_point[1] then
-                    local update_point = rolling_point or test_point
-                    pops:SuddenOffset(update_point[2], update_point[3])
-                    --Trace("### " .. PlayerNumber .. " @ " .. tostring(time) .. ": " .. tostring(update_point[1]) .. ", " .. tostring(update_point[2]) .. ") ")               
-                    break
-                end
-                rolling_point = test_point
-            end
+            local time = GAMESTATE:GetSongPosition():GetMusicSecondsVisible()
+            local beat = GAMESTATE:GetSongPosition():GetSongBeatVisible()
+            local horizon = TimingData:GetBeatFromElapsedTime(time + DynamicSuddenEffectiveTime[PlayerNumber])
+            local vertical_in_centerline_units = (horizon - beat) * DynamicSuddenConversionFactor[PlayerNumber]
+            if (vertical_in_centerline_units < 0) then return end
+            pops:SuddenOffset(vertical_in_centerline_units - 1, 1000000)
+            Trace("### "..tostring(time).." sec., "..tostring(beat).." beats, "..tostring(horizon).." futurebeat, "..tostring(vertical_in_centerline_units-1).." shift")
+        else
+            CalculateDynamicSuddenConstants(PlayerNumber)
         end
     end
 end
@@ -157,7 +121,8 @@ t["ScreenSelectMusic"] = Def.ActorFrame {
 t["ScreenGameplay"] = Def.ActorFrame {
     ModuleCommand=function(self)
         SCREENMAN:SystemMessage("DynamicSudden active!")
-        DynamicSuddenUpdateTable = {}
+        DynamicSuddenEffectiveTime = {}
+        DynamicSuddenConversionFactor = {}
         self:SetUpdateFunction(SuddenUpdater)
     end
 }
