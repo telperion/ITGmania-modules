@@ -1,5 +1,5 @@
 --[[--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--
--- Dynamic Sudden v0.2
+-- Dynamic Sudden v0.3
 -- 
 -- The Sudden option in Uncommon Modifiers is replaced with a dynamically
 -- changing amount of Sudden, chosen instantaneously to keep the time interval
@@ -88,7 +88,7 @@ local CalculateDynamicSuddenConstants = function(player)
     local arrow_height = _ARROW_SPACING * EffectiveSpeedMod * (1 - mini * 0.5)
     local beats_on_screen = _TOTAL_Y_DISTANCE / arrow_height
     DynamicSuddenEffectiveTime[player] = beats_on_screen * (60 / bpms[2])
-    DynamicSuddenConversionFactor[player] = arrow_height / _CENTER_LINE_Y
+    DynamicSuddenConversionFactor[player] = arrow_height / _CENTER_LINE_Y * MusicRate
     -- Trace("### " .. player .. ": " .. tostring(DynamicSuddenEffectiveTime[player]) .. " sec.")
 end
 
