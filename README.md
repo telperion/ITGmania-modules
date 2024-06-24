@@ -1,6 +1,6 @@
 # making some Simply Love modules in my spare time! yay
 
-## Dynamic Sudden v0.2
+## Dynamic Sudden v0.3
 
 The Sudden option in Uncommon Modifiers is replaced with a dynamically changing amount of Sudden, chosen instantaneously to keep the time interval between the receptors and the sudden horizon constant.
 ![image](https://github.com/telperion/ITGmania-modules/assets/774617/1b914e5f-c382-4973-a5b1-2671b6eb5e1b)
