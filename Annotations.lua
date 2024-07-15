@@ -9,7 +9,7 @@
 -- be used to hit an arrow, the right half of the arrow is darkened.
 --
 -- Not automatically derived! A simfile that wants to make use of this module
--- has to include an "annotations.json" of prescribed format.
+-- has to include an "annotations.json" of prescribed format and contents.
 --
 -- Copyright (c) 2024 Telperion
 --
@@ -27,12 +27,65 @@
 --||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--]]--
 local t = {}
 
-
 t["ScreenGameplay"] = Def.ActorFrame {
     ModuleCommand = function(self)
+        local player = GAMESTATE:GetMasterPlayerNumber()
+        local pn = ToEnumShortString(player)
+        local pops = GAMESTATE:GetPlayerState(player):GetPlayerOptions("ModsLevel_Preferred")
+
+        local current_noteskin = pops:NoteSkin()
+        local note_path = NOTESKIN:GetPathForNoteSkin("_down","tap note model",current_noteskin)
+        local note_model = lua.ReadFile(note_path)
+        Trace(note_model)
+
+        local meshes = {}
+        local in_meshes = false
+        local current_mesh = nil
+        local phase = nil
+        local vertex_count = 0
+        local normal_count = 0
+        local triangle_count = 0
+        for line in note_model:gmatch("[^\r\n]+") do
+            if line:find("^//") then
+                Trace("### Comment: "..line)
+            elseif line:find("^Meshes:") then
+                Trace("### In meshes")
+                in_meshes = true
+            elseif line:find("^Materials:") or line:find("^Bones:") then
+                Trace("### Out of meshes")
+                in_meshes = false
+            elseif in_meshes then
+                if line:find('^".+" %d+ %d+$') then
+                    current_match = line:match('^"(.+)"')
+                    phase = "name"
+                elseif line:find("^(%d+)$") then
+                    if phase == "name" then
+                        vertex_count = line:match("^(%d+)$")
+                        phase = "vertex"
+                    elseif phase == "vertex" then
+                        normal_count = line:match("^(%d+)$")
+                        phase = "normal"
+                    elseif phase == "normal" then
+                        triangle_count = line:match("^(%d+)$")
+                        phase = "triangle"
+                    end
+                elseif phase == "vertex" then
+                    for flags, x, y, z, u, v, bone in line:gmatch("(%d+)%s+([-.%d]+)%s+([-.%d]+)%s+([-.%d]+)%s+([-.%d]+)%s+([-.%d]+)%s+([-%d]+)") do
+                        Trace("### Vertex | Flags: "..flags.." (x, y, z): "..x..", "..y..", "..z.." (u, v): "..u..", "..v.." bone: "..bone)
+                    end
+                elseif phase == "normal" then
+                    for x, y, z in line:gmatch("([-.%d]+)%s+([-.%d]+)%s+([-.%d]+)") do
+                        Trace("### Normal | (x, y, z): "..x..", "..y..", "..z)
+                    end
+                elseif phase == "triangle" then
+                    for flags, v1, v2, v3, n1, n2, n3, smoothing in line:gmatch("(%d+)%s+(%d+)%s+(%d+)%s+(%d+)%s+(%d+)%s+(%d+)%s+(%d+)%s+(%d+)") do
+                        Trace("### Triangle | Flags: "..flags.." Vertices: "..v1..", "..v2..", "..v3.." Normals: "..n1..", "..n2..", "..n3.." Smoothing Group: "..smoothing)
+                    end
+                end
+            end
+        end
     end
 }
-
 
 return t
 
