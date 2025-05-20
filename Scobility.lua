@@ -56,11 +56,11 @@ local perfectOffset = 1.003
 
 local hands = {}
 local handSP = {
-    ["dance-single"] = 75,
-    ["dance-double"] = 50,
+    ["single"] = 75,
+    ["double"] = 50,
 }
 local handEP = {
-    ["dance-single"] = {
+    ["single"] = {
         [7] = 1,
         [8] = 2,
         [9] = 3,
@@ -71,7 +71,7 @@ local handEP = {
         [14] = 2,
         [15] = 1,
     },
-    ["dance-double"] = {
+    ["double"] = {
         [7] = 1,
         [8] = 2,
         [9] = 3,
@@ -102,7 +102,7 @@ local SP2EX = function(sppct)
     )
 end
 local EX2EP = function(expct)
-    local exClamp = (expct < cutoffEP) and (expct - cutoffEP) or 0
+    local exClamp = (expct < cutoffEP) and 0 or (expct - cutoffEP)
     return (
       (math.pow(100, exClamp / (100.0 - cutoffEP)) - 1) * (1000.0 / 99.0)
     )
@@ -118,6 +118,9 @@ local dumbassLSQComponents = function(a, b)
         q = q + vb
         sq = sq + va * vb
     end
+    -- SM(TableToString({
+    --     #a, s, s2, q, sq
+    -- }))
     return #a, s, s2, q, sq
 end
 
@@ -139,10 +142,12 @@ end
 local dumbassLSQWithCutPoint = function(a, b, anchor)
     -- Plain' ol unanchored least squares best-fit
     -- (but there's two of them!)
-    local a_l = {table.unpack(a, 0, anchor)}
-    local a_r = {table.unpack(a, anchor, #a)}
-    local b_l = {table.unpack(b, 0, anchor)}
-    local b_r = {table.unpack(b, anchor, #b)}
+    local a_l = {unpack(a, 1, anchor)}
+    local a_r = {unpack(a, anchor+1, #a)}
+    local b_l = {unpack(b, 1, anchor)}
+    local b_r = {unpack(b, anchor+1, #b)}
+    if (#a_l < 2) or (#a_r < 2) then return nil end
+
     local c0_l, c1_l, res_l = dumbassLSQFree(a_l, b_l);
     local c0_r, c1_r, res_r = dumbassLSQFree(a_r, b_r);
     local horizon_spice = (c1_r - c1_l) / (c0_l - c0_r);
@@ -173,10 +178,11 @@ local dumbassLSQAnchored = function(a, b, anchor)
         a_offset[#a_offset+1] = v - k
         q = q + b[i]
     end
-    local a_l = {table.unpack(a_offset, 0, anchor)}
-    local a_r = {table.unpack(a_offset, anchor, #a)}
-    local b_l = {table.unpack(b, 0, anchor)}
-    local b_r = {table.unpack(b, anchor, #b)}
+    local a_l = {unpack(a_offset, 1, anchor)}
+    local a_r = {unpack(a_offset, anchor+1, #a)}
+    local b_l = {unpack(b, 1, anchor)}
+    local b_r = {unpack(b, anchor+1, #b)}
+    if (#a_l < 2) or (#a_r < 2) then return nil end
 
     -- Borrow some of the calculations from the naive least squares method.
     local ones_l, s_l, s2_l, q_l, sq_l = dumbassLSQComponents(a_l, b_l)
@@ -205,9 +211,9 @@ local dumbassLSQAnchored = function(a, b, anchor)
     for i, va in ipairs(a_offset) do
         local vb = b[i]
         if i < anchor then
-            residual = residual + (vb - (c1_l * a_offset + c0))
+            residual = residual + (vb - (c1_l * va + c0))
         else
-            residual = residual + (vb - (c1_r * a_offset + c0))
+            residual = residual + (vb - (c1_r * va + c0))
         end
     end
 
@@ -223,15 +229,16 @@ end
 -- Unga bunga!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 local spiceHorizonFit = function(a, b)
     -- Requires independent variable to be sorted.
-    local best = {
-        ["cut_point"] = -1,
-        ["horizon_spice"] = 0,
-        ["horizon_quality"] = 0,
-        ["mild_slope"] = 0,
-        ["hot_slope"] = 0,
-        ["timing_power"] = 0,
-        ["residual"] = 0,
-    }
+    local best = nil
+    -- local best = {
+    --     ["cut_point"] = -1,
+    --     ["horizon_spice"] = 0,
+    --     ["horizon_quality"] = 0,
+    --     ["mild_slope"] = 0,
+    --     ["hot_slope"] = 0,
+    --     ["timing_power"] = 0,
+    --     ["residual"] = 0,
+    -- }
 
     -- Don't unga bunga too close to the edges of the spice spread.
     local horizon_centering = math.ceil(math.sqrt(#a))
@@ -242,86 +249,51 @@ local spiceHorizonFit = function(a, b)
         -- Try fitting an unanchored dual least squares first.
         -- If the intersection lands between this pair of spice values, it
         -- automatically wins the optimization for this step of the DP algorithm.
-        local best_fit_here_naive = dumbassLSQWithCutPoint(a, b, j)
-        local best_fit_here = best_fit_here_naive
-        if (best_fit_here.horizon_spice < a[j]) or (best_fit_here.horizon_spice > a[j+1]) then
+        local best_fit_here = dumbassLSQWithCutPoint(a, b, j)
+        -- SM(TableToString(best_fit_here))
+        if (not best_fit_here) or ((best_fit_here.horizon_spice < a[j]) or (best_fit_here.horizon_spice > a[j+1])) then
             -- The intersection (a.k.a. spice horizon) didn't land between this
             -- pair of spice values, so it can't satisfy the optimization constraint.
             -- Let's evaluate what the best fits are on the boundaries and see which
             -- wins among those two.
             local best_fit_here_l = dumbassLSQAnchored(a, b, j)
             local best_fit_here_r = dumbassLSQAnchored(a, b, j + 1)
-            if (best_fit_here_l.residual < best_fit_here_r.residual) then
-                best_fit_here = {
-                    ["cut_point"] = j,
-                    ["horizon_spice"] = a[j],
-                    ["horizon_quality"] = best_fit_here_l.c0,
-                    ["mild_slope"] = best_fit_here_l.c1_l,
-                    ["hot_slope"] = best_fit_here_l.c1_r,
-                    ["timing_power"] = best_fit_here_l.c0 - best_fit_here_l.c1_l * a[j],
-                    ["residual"] = best_fit_here_l.residual,
-                }
-            else
-                best_fit_here = {
-                    ["cut_point"] = j,
-                    ["horizon_spice"] = a[j + 1],
-                    ["horizon_quality"] = best_fit_here_r.c0,
-                    ["mild_slope"] = best_fit_here_r.c1_l,
-                    ["hot_slope"] = best_fit_here_r.c1_r,
-                    ["timing_power"] = best_fit_here_l.c0 - best_fit_here_l.c1_l * a[j],
-                    ["residual"] = best_fit_here_r.residual,
-                }
+            if best_fit_here_l and best_fit_here_r then
+                if (best_fit_here_l.residual < best_fit_here_r.residual) then
+                    best_fit_here = {
+                        ["cut_point"] = j,
+                        ["horizon_spice"] = a[j],
+                        ["horizon_quality"] = best_fit_here_l.c0,
+                        ["mild_slope"] = best_fit_here_l.c1_l,
+                        ["hot_slope"] = best_fit_here_l.c1_r,
+                        ["timing_power"] = best_fit_here_l.c0 - best_fit_here_l.c1_l * a[j],
+                        ["residual"] = best_fit_here_l.residual,
+                    }
+                else
+                    best_fit_here = {
+                        ["cut_point"] = j,
+                        ["horizon_spice"] = a[j + 1],
+                        ["horizon_quality"] = best_fit_here_r.c0,
+                        ["mild_slope"] = best_fit_here_r.c1_l,
+                        ["hot_slope"] = best_fit_here_r.c1_r,
+                        ["timing_power"] = best_fit_here_l.c0 - best_fit_here_l.c1_l * a[j],
+                        ["residual"] = best_fit_here_r.residual,
+                    }
+                end
+                -- SM(TableToString(best_fit_here))
             end
         end
 
-        if (best.cut_point < 0) or (best_fit_here.residual < best_fit_so_far.residual) then
+        if best_fit_here and ((not best) or (best_fit_here.residual < best.residual)) then
             best = best_fit_here;
         end
     end
     return best;
 end
 
-local CacheSpice = function()
-    if (GetTimeSinceStart() - spiceLastUpdatedRelative < spiceUpdateInterval) then
-        return
-    end
-
-    spiceUpdateInProgress = true
-
-    NETWORK:HttpRequest{
-        url="https://scobility.azurewebsites.net/catalog/" .. catalogName .. "/chart/all",
-        method="GET",
-        connectTimeout=60,
-        transferTimeout=60,
-        onResponse=function(response)
-            if response.statusCode then
-                local body = nil
-                local code = response.statusCode
-                if code ~= 200 then
-                    SM("scobility: Did not send ITL2025 spice values. (" .. tostring(code) .. ")")
-                    return
-                end
-
-                body = JsonDecode(response.body)
-                if not body.status then
-                    SM("scobility: Couldn't retrieve ITL2025 spice values.")
-                    return
-                end
-                if (body.data and not #body.data) then
-                    SM("scobility: No ITL2025 spice values retrieved.")
-                    return
-                end
-
-                spice = body.data
-                spiceLastUpdatedRelative = GetTimeSinceStart()
-                SM("scobility: ITL2025 spice values successfully cached.")
-                spiceUpdateInProgress = false
-            end
-        end,
-    }
-end
-
 local CalculatePlayerData = function(player)
+    if not GAMESTATE:GetCurrentStyle() then return end
+
     local currentStyle = GAMESTATE:GetCurrentStyle():GetName()
     if PROFILEMAN:IsPersistentProfile(player) then
         local pn = ToEnumShortString(player)
@@ -330,43 +302,59 @@ local CalculatePlayerData = function(player)
 
         -- lol yikes
         for path, hash in pairs(pathMap) do
-            local song = SONGMAN:FindSong(path)
+            local arr = split("/", path)
+            local songSubPath = arr[3] .. "/" .. arr[4]
+            local song = SONGMAN:FindSong(songSubPath)
             if song then
-                steps = song:GetAllSteps()[1]
-                if steps then
-                    styleMap[hash] = steps:GetChartStyle()
-                    diffMap[hash] = steps:GetMeter()
+                for steps in ivalues(song:GetStepsByStepsType("StepsType_Dance_Single")) do
+                    styleMap[hash] = "single"
+                    diffMap[hash] = tonumber(steps:GetMeter())
+                end
+                for steps in ivalues(song:GetStepsByStepsType("StepsType_Dance_Double")) do
+                    styleMap[hash] = "double"
+                    diffMap[hash] = tonumber(steps:GetMeter())
                 end
             end
         end
 
+        local spicePoints = {}
         local spiceList = {}
         local qualityList = {}
         local handAccumulator = {[-1] = {}}
-        for handDiff, handSize in pairs(handEP) do
+        for handDiff, handSize in pairs(handEP[currentStyle]) do
             handAccumulator[handDiff] = {}
         end
         
         for hash, data in pairs(hashMap) do
-            if styleMap[hash] and styleMap[hash] == currentStyle then
+            if diffMap[hash] and styleMap[hash] and styleMap[hash] == currentStyle then
                 if spice[hash] then
-                    spiceList[#spiceList+1] = math.log(spice[hash]) / math.log(2)
-                    qualityList[#qualityList+1] = (
-                        math.log(spice[hash]) -
-                        math.log(perfectOffset - data["ex"] * 0.0001)
-                    ) / math.log(2)
+                    spicePoints[#spicePoints+1] = {
+                        ["spice"] = math.log(spice[hash]["spice"]) / math.log(2),
+                        ["quality"] = (
+                            math.log(spice[hash]["spice"]) -
+                            math.log(perfectOffset - data["ex"] * 0.0001)
+                        ) / math.log(2)
+                    }
                 end
-                local currentSP = data["passingPoints"] + data["maxScoringPoints"] * EX2SP(data["ex"])
+                local currentSP = data["passingPoints"] + data["maxScoringPoints"] * EX2SP(data["ex"] * 0.01) * 0.01
+                local diff = diffMap[hash]
                 handAccumulator[-1][#handAccumulator[-1]+1] = {
                     ["hash"] = hash,
                     ["value"] = currentSP
                 }
-                handAccumulator[diffMap[hash]][hash] = {
+                handAccumulator[diff][#handAccumulator[diff]+1] = {
                     ["hash"] = hash,
-                    ["value"] = data["ex"]
+                    ["value"] = data["ex"] * 0.01
                 }
             end
         end
+        table.sort(spicePoints, function(a, b) return a["spice"] < b["spice"] end)
+        for spicePoint in ivalues(spicePoints) do
+            spiceList[#spiceList+1] = spicePoint["spice"]
+            qualityList[#qualityList+1] = spicePoint["quality"]
+        end
+        SM("Spice points: "..tostring(#spiceList))
+
         coefs[pn] = spiceHorizonFit(spiceList, qualityList)
         hands[pn] = {
             ["SP"] = {},
@@ -376,9 +364,9 @@ local CalculatePlayerData = function(player)
         for handDiff, handContents in pairs(handAccumulator) do
             table.sort(handContents, function(a, b) return a["value"] > b["value"] end)
             if handDiff == -1 then
-                hands[pn]["SP"] = {table.unpack(handContents, 1, handSP[currentStyle])}
+                hands[pn]["SP"] = {unpack(handContents, 1, handSP[currentStyle])}
             else
-                hands[pn]["EP"][handDiff] = {table.unpack(handContents, 1, handEP[currentStyle][handDiff])}
+                hands[pn]["EP"][handDiff] = {unpack(handContents, 1, handEP[currentStyle][handDiff])}
             end
         end
     end
@@ -421,7 +409,7 @@ local EvaluateChartForPlayer = function(player, song)
     if not diffMap[hash] then return nil end
     if not styleMap[hash] then return nil end
     if styleMap[hash] ~= currentStyle then return nil end
-    local s = spice[hash]
+    local s = math.log(spice[hash]["spice"]) / math.log(2)
     local diff = diffMap[hash]
 
     local qualityFit = EvaluateScobilityFit(player, s)
@@ -444,13 +432,11 @@ local EvaluateChartForPlayer = function(player, song)
     local potentialSP = 0
     local potentialEP = 0
     if hashMap[hash] and hashMap[hash]["ex"] then
-        currentEX = hashMap[hash]["ex"]
-        currentSP = math.floor(hashMap[hash]["passingPoints"] + hashMap[hash]["maxScoringPoints"] * EX2SP(currentEX) + 0.5)
-        currentEP = EX2EP(currentEX)
-    end
-    if targetEX > currentEX then
-        targetSP = math.floor(hashMap[hash]["passingPoints"] + hashMap[hash]["maxScoringPoints"] * EX2SP(targetEX) + 0.5)
-        targetEP = EX2EP(targetEX)
+        currentEX = hashMap[hash]["ex"] * 0.01
+        currentSP = math.floor(hashMap[hash]["passingPoints"] + hashMap[hash]["maxScoringPoints"] * EX2SP(currentEX) * 0.01)
+        currentEP = (hashMap[hash]["ex"] == 10000) and 1000 or math.floor(EX2EP(currentEX))
+        targetSP = math.floor(hashMap[hash]["passingPoints"] + hashMap[hash]["maxScoringPoints"] * EX2SP(targetEX) * 0.01)
+        targetEP = (targetEX == 100) and 1000 or math.floor(EX2EP(targetEX))
     end
     local contributorsSP = {}
     local contributorsEP = {}
@@ -458,34 +444,40 @@ local EvaluateChartForPlayer = function(player, song)
     local floorEPEX = 100
     local alreadyContributesSP = false
     local alreadyContributesEP = false
-    for _, topSP in handSP[pn] do
+    for topSP in ivalues(hands[pn]["SP"]) do
         contributorsSP[#contributorsSP+1] = topSP["hash"]
         floorSP = math.min(floorSP, topSP["value"])
+        if hash == topSP["hash"] then alreadyContributesSP = true end
     end
-    for _, topEP in handEP[pn][diff] do
+    for topEP in ivalues(hands[pn]["EP"][diff]) do
         contributorsEP[#contributorsEP+1] = topEP["hash"]
         floorEPEX = math.min(floorEPEX, topEP["value"])
+        if hash == topEP["hash"] then alreadyContributesEP = true end
     end
 
     if alreadyContributesSP then
         potentialSP = targetSP - currentSP
     else
         potentialSP = targetSP - floorSP
-        if potentialSP < 0 then potentialSP = 0 end
     end
+    if potentialSP < 0 then potentialSP = 0 end
 
     if alreadyContributesEP then
         potentialEP = targetEP - currentEP
     else
         potentialEP = targetEP - EX2EP(floorEPEX)
-        if potentialEP < 0 then potentialEP = 0 end
     end
-
-    local emote = "🌶️"
+    if potentialEP < 0 then potentialEP = 0 end
 
     return {
-        ["emote"] = emote,
+        ["qualityFit"] = qualityFit,
         ["targetEX"] = targetEX,
+        ["currentSP"] = currentSP,
+        ["currentEP"] = currentEP,
+        ["currentRP"] = currentSP + currentEP,
+        ["targetSP"] = targetSP,
+        ["targetEP"] = targetEP,
+        ["targetRP"] = targetSP + targetEP,
         ["potentialSP"] = potentialSP,
         ["potentialEP"] = potentialEP,
         ["potentialRP"] = potentialSP + potentialEP,
@@ -498,14 +490,101 @@ end
 local ScobilityInTheScorebox = function(player)
 end
 
-t["ScreenSelectMusic"] = Def.ActorFrame {
+
+local CacheSpice = function()
+    if spiceUpdateInProgress then return end
+
+    if (GetTimeSinceStart() - spiceLastUpdatedRelative < spiceUpdateInterval) then
+        return
+    end
+
+    spiceUpdateInProgress = true
+
+    NETWORK:HttpRequest{
+        url="https://scobility.azurewebsites.net/catalog/" .. catalogName .. "/chart/all",
+        method="GET",
+        connectTimeout=60,
+        transferTimeout=60,
+        onResponse=function(response)
+            if response.statusCode then
+                local body = nil
+                local code = response.statusCode
+                if code ~= 200 then
+                    SM("scobility: Did not send ITL2025 spice values. (" .. tostring(code) .. ")")
+                    return
+                end
+
+                body = JsonDecode(response.body)
+                if not body.status then
+                    SM("scobility: Couldn't retrieve ITL2025 spice values.")
+                    return
+                end
+                if (body.data and not #body.data) then
+                    SM("scobility: No ITL2025 spice values retrieved.")
+                    return
+                end
+
+                spice = body.data
+                spiceLastUpdatedRelative = GetTimeSinceStart()
+                for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+                    CalculatePlayerData(player)
+                end
+                SM("scobility: ITL2025 spice values successfully cached.")
+                spiceUpdateInProgress = false
+            end
+        end,
+    }
+end
+
+
+af = Def.ActorFrame {
     ModuleCommand=function(self)
         CacheSpice()
+    end,
+    InitCommand=function(self)
         for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-            ScobilityInTheSongwheel(player)
-            ScobilityInTheScorebox(player)
+            CalculatePlayerData(player)
         end
-    end
+    end,
+	CurrentSongChangedMessageCommand=function(self)
+        local result = ""
+        for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+            local pn = ToEnumShortString(player)
+            local song = GAMESTATE:GetCurrentSong()
+            if #spice and (not coefs[pn]) then
+                SM("scobility: Recalculating...")
+                CalculatePlayerData(player)
+            end
+            if coefs[pn] then
+                if song then
+                    result = result .. pn .. ": " .. TableToString(
+                        EvaluateChartForPlayer(player, song)
+                    ) .. "\n"
+                else
+                    result = result .. pn .. ": " .. TableToString(
+                        coefs[pn]
+                    ) .. "\n"
+                end
+                ScobilityInTheSongwheel(player)
+                ScobilityInTheScorebox(player)
+            end
+        end
+        -- SM(result)
+	end
 }
+
+for player in ivalues(PlayerNumber) do
+    af[#af+1] = Def.ActorFrame {
+        PlayerJoinedMessageCommand=function(self)
+            self:visible(GAMESTATE:IsPlayerEnabled(player))
+            CalculatePlayerData(player)
+        end,
+        PlayerUnjoinedMessageCommand=function(self)
+            self:visible(GAMESTATE:IsPlayerEnabled(player))
+        end,
+    }
+end
+
+t["ScreenSelectMusic"] = af
 
 return t
