@@ -36,7 +36,6 @@ local year = "2025"
 local spiceUpdateInProgress = false
 local spiceUpdateInterval = 3600    -- cache no more often than every hour
 local spiceLastUpdatedRelative = -spiceUpdateInterval
-local spicePath = "scobility" .. year .. ".json"
 local catalogName = "ITL" .. year
 local groupName = "ITL Online " .. year
 
@@ -471,7 +470,9 @@ local EvaluateChartForPlayer = function(player, song, chartHash)
 
     return {
         ["qualityFit"] = qualityFit,
+        ["currentEX"] = hashMap[hash]["ex"] * 0.01,
         ["targetEX"] = targetEX,
+        ["floorEPEX"] = floorEPEX,
         ["currentSP"] = currentSP,
         ["currentEP"] = currentEP,
         ["currentRP"] = currentSP + currentEP,
@@ -503,20 +504,6 @@ local ScobilityOnTheMusicWheel = function(self)
         local scobilityInfo = EvaluateChartForPlayer(focusPlayer, nil, titleMap[title])
         if scobilityInfo then
             Trace(TableToString(scobilityInfo))
-            Trace(
-                "scobility (" ..
-                PROFILEMAN:GetPlayerName(player) ..
-                "): Target " ..
-                scobilityInfo["targetEX"] ..
-                "% EX for +" ..
-                scobilityInfo["potentialSP"] ..
-                " SP, +" ..
-                scobilityInfo["potentialEP"] ..
-                " EP = +" ..
-                scobilityInfo["potentialRP"] ..
-                " RP"
-            )
-
             local potentialRP = "+" .. tostring(("%.0f"):format(scobilityInfo["potentialRP"]))
             local targetEX = "@ " .. tostring(("%.2f"):format(scobilityInfo["targetEX"]))
             if split then
