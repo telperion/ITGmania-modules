@@ -41,7 +41,7 @@ local t = {}
 local year = "2025"
 local spice = {}
 local spiceUpdateInProgress = false
-local spiceUpdateInterval = 60    -- TODO: cache no more often than every hour
+local spiceUpdateInterval = 3600    -- cache no more often than every hour
 local spiceLastUpdatedRelative = -spiceUpdateInterval
 local spicePath = "scobility" .. year .. ".json"
 local catalogName = "ITL" .. year
@@ -50,6 +50,7 @@ local groupName = "ITL Online " .. year
 -- I wish these were stored themeside by ITL itself
 local diffMap = {}
 local styleMap = {}
+local titleMap = {}
 
 local coefs = {}
 local perfectOffset = 1.003
@@ -102,7 +103,7 @@ local SP2EX = function(sppct)
     )
 end
 local EX2EP = function(expct)
-    local exClamp = (expct < cutoffEP) and 0 or (expct - cutoffEP)
+    local exClamp = (expct > cutoffEP) and (expct - cutoffEP) or 0
     return (
       (math.pow(100, exClamp / (100.0 - cutoffEP)) - 1) * (1000.0 / 99.0)
     )
@@ -118,9 +119,6 @@ local dumbassLSQComponents = function(a, b)
         q = q + vb
         sq = sq + va * vb
     end
-    -- SM(TableToString({
-    --     #a, s, s2, q, sq
-    -- }))
     return #a, s, s2, q, sq
 end
 
@@ -241,7 +239,7 @@ local spiceHorizonFit = function(a, b)
     -- }
 
     -- Don't unga bunga too close to the edges of the spice spread.
-    local horizon_centering = math.ceil(math.sqrt(#a))
+    local horizon_centering = math.floor(math.sqrt(#a))
 
     -- Test the fitness of the piecewise linear approximation between each
     -- pair of spice values.
@@ -250,7 +248,6 @@ local spiceHorizonFit = function(a, b)
         -- If the intersection lands between this pair of spice values, it
         -- automatically wins the optimization for this step of the DP algorithm.
         local best_fit_here = dumbassLSQWithCutPoint(a, b, j)
-        -- SM(TableToString(best_fit_here))
         if (not best_fit_here) or ((best_fit_here.horizon_spice < a[j]) or (best_fit_here.horizon_spice > a[j+1])) then
             -- The intersection (a.k.a. spice horizon) didn't land between this
             -- pair of spice values, so it can't satisfy the optimization constraint.
@@ -276,11 +273,10 @@ local spiceHorizonFit = function(a, b)
                         ["horizon_quality"] = best_fit_here_r.c0,
                         ["mild_slope"] = best_fit_here_r.c1_l,
                         ["hot_slope"] = best_fit_here_r.c1_r,
-                        ["timing_power"] = best_fit_here_l.c0 - best_fit_here_l.c1_l * a[j],
+                        ["timing_power"] = best_fit_here_r.c0 - best_fit_here_r.c1_l * a[j + 1],
                         ["residual"] = best_fit_here_r.residual,
                     }
                 end
-                -- SM(TableToString(best_fit_here))
             end
         end
 
@@ -295,6 +291,7 @@ local CalculatePlayerData = function(player)
     if not GAMESTATE:GetCurrentStyle() then return end
 
     local currentStyle = GAMESTATE:GetCurrentStyle():GetName()
+    if currentStyle ~= "double" then currentStyle = "single" end
     if PROFILEMAN:IsPersistentProfile(player) then
         local pn = ToEnumShortString(player)
         local pathMap = SL[pn].ITLData["pathMap"]
@@ -314,6 +311,7 @@ local CalculatePlayerData = function(player)
                     styleMap[hash] = "double"
                     diffMap[hash] = tonumber(steps:GetMeter())
                 end
+                titleMap[song:GetDisplayMainTitle()] = hash
             end
         end
 
@@ -353,13 +351,14 @@ local CalculatePlayerData = function(player)
             spiceList[#spiceList+1] = spicePoint["spice"]
             qualityList[#qualityList+1] = spicePoint["quality"]
         end
-        SM("Spice points: "..tostring(#spiceList))
+        SM("Sample points: "..tostring(#spiceList))
 
         coefs[pn] = spiceHorizonFit(spiceList, qualityList)
         hands[pn] = {
             ["SP"] = {},
             ["EP"] = {}
         }
+        SM(TableToString(coefs[pn]))
 
         for handDiff, handContents in pairs(handAccumulator) do
             table.sort(handContents, function(a, b) return a["value"] > b["value"] end)
@@ -393,8 +392,7 @@ local EvaluateScobilityFit = function(player, s)
     end
 end
 
-local EvaluateChartForPlayer = function(player, song)
-    local songPath = song:GetSongDir()
+local EvaluateChartForPlayer = function(player, song, chartHash)
     local pn = ToEnumShortString(player)
     local currentStyle = GAMESTATE:GetCurrentStyle():GetName()
 
@@ -403,7 +401,11 @@ local EvaluateChartForPlayer = function(player, song)
     local pathMap = SL[pn].ITLData["pathMap"]
     local hashMap = SL[pn].ITLData["hashMap"]
 
-    local hash = pathMap[songPath]
+    local hash = chartHash
+    if not hash then
+        local songPath = song:GetSongDir()
+        hash = pathMap[songPath]
+    end
     if not hash then return nil end
     if not spice[hash] then return nil end
     if not diffMap[hash] then return nil end
@@ -416,12 +418,12 @@ local EvaluateChartForPlayer = function(player, song)
     if not qualityFit then return nil end
 
     local targetEX = 100.0 * (perfectOffset - math.pow(2, s - qualityFit))
-    if targetEX > 99.99 then
+    if targetEX > 100 then
         targetEX = 100
     elseif targetEX < 0 then
         targetEX = 0
     else
-        targetEX = math.floor(targetEX * 100 + 0.5) * 0.01
+        targetEX = math.ceil(targetEX * 100) * 0.01
     end
 
     local currentEX = 0
@@ -465,7 +467,7 @@ local EvaluateChartForPlayer = function(player, song)
     if alreadyContributesEP then
         potentialEP = targetEP - currentEP
     else
-        potentialEP = targetEP - EX2EP(floorEPEX)
+        potentialEP = targetEP - math.floor(EX2EP(floorEPEX))
     end
     if potentialEP < 0 then potentialEP = 0 end
 
@@ -484,7 +486,78 @@ local EvaluateChartForPlayer = function(player, song)
     }
 end
 
+
+local FetchRelevantMusicWheelItemActors = function(musicWheelItem)
+    local a0a = musicWheelItem:GetChild("SongName")
+    if not a0a then return nil end
+    local a0a1 = a0a:GetChild("Title")
+    if not a0a1 then return nil end
+    local a0b = musicWheelItem:GetChild("SongNormalPart")
+    if not a0b then return nil end
+    local a0b1 = a0b:GetChild("")
+    result = {
+        ["title"] = a0a1:GetText(),
+    }
+    Trace("### a0b")
+    rec_print_children(a0b)
+    for i, ai in ipairs(a0b1) do
+        Trace("### "..tostring(i))
+        rec_print_children(ai)
+        if ai then
+            local y = ai:GetY()
+            if (y == -7) then
+                result["P1"] = ai
+            elseif (y == 7) then
+                result["P2"] = ai
+            end
+        end
+    end
+    return result
+end
+
+
 local ScobilityInTheSongwheel = function(player)
+    local pn = ToEnumShortString(player)
+    local pnOther = (pn == "P1") and "P2" or "P1"
+    if not coefs[pn] then return end
+
+    local a0 = SCREENMAN:GetTopScreen()
+    if not a0 then return end
+    local a1 = a0:GetChild("MusicWheel")
+    if not a1 then return end
+    local a2 = a1:GetChild("MusicWheelItem")
+    if not a2 then return end
+
+    local songsPresent = {}
+    for i, ai in ipairs(a2) do
+        -- Trace("### "..tostring(i))
+        -- rec_print_children(ai)
+        local a3 = FetchRelevantMusicWheelItemActors(ai)
+        if a3 and a3["title"] then
+            if titleMap[a3["title"]] then
+                local scobilityInfo = EvaluateChartForPlayer(player, nil, titleMap[a3["title"]])
+                if scobilityInfo then
+                    if a3[pn] then
+                        local hint = "+" .. 
+                            tostring(("%.0f"):format(scobilityInfo["potentialRP"])) ..
+                            " RP @ " ..
+                            tostring(("%.2f"):format(scobilityInfo["targetEX"])) ..
+                            "% EX"
+                        Trace(">>> " .. a3["title"] .. ": " .. hint)
+                        a3[pn]:settext(hint)
+                    end
+                    if a3[pnOther] and GAMESTATE:GetNumSidesJoined() == 1 then
+                        a3[pnOther]:settext("")
+                    end
+                else
+                    if a3[pn] then a3[pn]:settext("hi :)") end
+                    Trace(">>> " .. a3["title"] .. ": hi :)")
+                end
+            else
+                Trace(TableToString(titleMap))
+            end
+        end
+    end
 end
 
 local ScobilityInTheScorebox = function(player)
@@ -555,21 +628,24 @@ af = Def.ActorFrame {
                 SM("scobility: Recalculating...")
                 CalculatePlayerData(player)
             end
-            if coefs[pn] then
-                if song then
-                    result = result .. pn .. ": " .. TableToString(
-                        EvaluateChartForPlayer(player, song)
-                    ) .. "\n"
-                else
-                    result = result .. pn .. ": " .. TableToString(
-                        coefs[pn]
-                    ) .. "\n"
+            if coefs[pn] and song then
+                local scobility_target = EvaluateChartForPlayer(player, song, nil)
+                if scobility_target then
+                    SM(
+                        "scobility: Target " ..
+                        scobility_target["targetEX"] ..
+                        "% EX for +" ..
+                        scobility_target["potentialSP"] ..
+                        " SP, +" ..
+                        scobility_target["potentialEP"] ..
+                        " EP = +" ..
+                        scobility_target["potentialRP"] ..
+                        " RP"
+                    )
                 end
-                ScobilityInTheSongwheel(player)
-                ScobilityInTheScorebox(player)
             end
+            ScobilityInTheSongwheel(player)
         end
-        -- SM(result)
 	end
 }
 
@@ -581,6 +657,8 @@ for player in ivalues(PlayerNumber) do
         end,
         PlayerUnjoinedMessageCommand=function(self)
             self:visible(GAMESTATE:IsPlayerEnabled(player))
+            local pn = ToEnumShortString(player)
+            coefs[pn] = nil
         end,
     }
 end
