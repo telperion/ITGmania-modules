@@ -351,14 +351,14 @@ local CalculatePlayerData = function(player)
             spiceList[#spiceList+1] = spicePoint["spice"]
             qualityList[#qualityList+1] = spicePoint["quality"]
         end
-        SM("Sample points: "..tostring(#spiceList))
+        Trace("Sample points: "..tostring(#spiceList))
 
         coefs[pn] = spiceHorizonFit(spiceList, qualityList)
         hands[pn] = {
             ["SP"] = {},
             ["EP"] = {}
         }
-        SM(TableToString(coefs[pn]))
+        Trace(TableToString(coefs[pn]))
 
         for handDiff, handContents in pairs(handAccumulator) do
             table.sort(handContents, function(a, b) return a["value"] > b["value"] end)
@@ -368,6 +368,8 @@ local CalculatePlayerData = function(player)
                 hands[pn]["EP"][handDiff] = {unpack(handContents, 1, handEP[currentStyle][handDiff])}
             end
         end
+
+        SM("scobility: Calculated scobility coefficients for " .. PROFILEMAN:GetPlayerName(player))
     end
 end
 
@@ -486,8 +488,58 @@ local EvaluateChartForPlayer = function(player, song, chartHash)
     }
 end
 
+local ScobilityOnTheMusicWheel = function(self)
+    local player = (self:GetY() == 7) and "PlayerNumber_P2" or "PlayerNumber_P1"
+    local other = (self:GetY() == -7) and "PlayerNumber_P2" or "PlayerNumber_P1"
+    local title = self:GetParent():GetParent():GetChild("SongName"):GetChild("Title"):GetText()
+    Trace("ScobilityOnThisPlayer "..player.." "..title)
+    local focusPlayer = player
+    local split = false
 
-local FetchRelevantMusicWheelItemActors = function(musicWheelItem)
+    if GAMESTATE:GetNumSidesJoined() == 1 then
+        split = true
+        if PROFILEMAN:IsPersistentProfile(other) then
+            focusPlayer = other
+        end
+    end
+
+    if titleMap[title] then
+        local scobilityInfo = EvaluateChartForPlayer(focusPlayer, nil, titleMap[title])
+        if scobilityInfo then
+            Trace(
+                "scobility (" ..
+                PROFILEMAN:GetPlayerName(player) ..
+                "): Target " ..
+                scobilityInfo["targetEX"] ..
+                "% EX for +" ..
+                scobilityInfo["potentialSP"] ..
+                " SP, +" ..
+                scobilityInfo["potentialEP"] ..
+                " EP = +" ..
+                scobilityInfo["potentialRP"] ..
+                " RP"
+            )
+
+            local potentialRP = "+" .. tostring(("%.0f"):format(scobilityInfo["potentialRP"]))
+            local targetEX = "@ " .. tostring(("%.2f"):format(scobilityInfo["targetEX"]))
+            if split then
+                if player == "PlayerNumber_P1" then
+                    self:settext(potentialRP .. " RP")
+                else
+                    self:settext(targetEX)
+                end
+            else
+                self:settext(potentialRP .. " " .. targetEX)
+            end
+            self:visible(true)
+            return
+        end
+    end
+    self:visible(false)
+end
+
+
+local TweakRelevantMusicWheelItemActors = function(musicWheelItem)
     local a0a = musicWheelItem:GetChild("SongName")
     if not a0a then return nil end
     local a0a1 = a0a:GetChild("Title")
@@ -506,58 +558,21 @@ local FetchRelevantMusicWheelItemActors = function(musicWheelItem)
         if ai then
             local y = ai:GetY()
             if (y == -7) then
+                if not ai:GetCommand("Scobility") then
+                    ai:addcommand("Scobility", ScobilityOnTheMusicWheel)
+                    ai:addcommand("Set", ScobilityOnTheMusicWheel)
+                end
                 result["P1"] = ai
             elseif (y == 7) then
+                if not ai:GetCommand("Scobility") then
+                    ai:addcommand("Scobility", ScobilityOnTheMusicWheel)
+                    ai:addcommand("Set", ScobilityOnTheMusicWheel)
+                end
                 result["P2"] = ai
             end
         end
     end
     return result
-end
-
-
-local ScobilityInTheSongwheel = function(player)
-    local pn = ToEnumShortString(player)
-    local pnOther = (pn == "P1") and "P2" or "P1"
-    if not coefs[pn] then return end
-
-    local a0 = SCREENMAN:GetTopScreen()
-    if not a0 then return end
-    local a1 = a0:GetChild("MusicWheel")
-    if not a1 then return end
-    local a2 = a1:GetChild("MusicWheelItem")
-    if not a2 then return end
-
-    local songsPresent = {}
-    for i, ai in ipairs(a2) do
-        -- Trace("### "..tostring(i))
-        -- rec_print_children(ai)
-        local a3 = FetchRelevantMusicWheelItemActors(ai)
-        if a3 and a3["title"] then
-            if titleMap[a3["title"]] then
-                local scobilityInfo = EvaluateChartForPlayer(player, nil, titleMap[a3["title"]])
-                if scobilityInfo then
-                    if a3[pn] then
-                        local hint = "+" .. 
-                            tostring(("%.0f"):format(scobilityInfo["potentialRP"])) ..
-                            " RP @ " ..
-                            tostring(("%.2f"):format(scobilityInfo["targetEX"])) ..
-                            "% EX"
-                        Trace(">>> " .. a3["title"] .. ": " .. hint)
-                        a3[pn]:settext(hint)
-                    end
-                    if a3[pnOther] and GAMESTATE:GetNumSidesJoined() == 1 then
-                        a3[pnOther]:settext("")
-                    end
-                else
-                    if a3[pn] then a3[pn]:settext("hi :)") end
-                    Trace(">>> " .. a3["title"] .. ": hi :)")
-                end
-            else
-                Trace(TableToString(titleMap))
-            end
-        end
-    end
 end
 
 local ScobilityInTheScorebox = function(player)
@@ -576,8 +591,8 @@ local CacheSpice = function()
     NETWORK:HttpRequest{
         url="https://scobility.azurewebsites.net/catalog/" .. catalogName .. "/chart/all",
         method="GET",
-        connectTimeout=60,
-        transferTimeout=60,
+        connectTimeout=10,
+        transferTimeout=10,
         onResponse=function(response)
             if response.statusCode then
                 local body = nil
@@ -609,8 +624,13 @@ local CacheSpice = function()
     }
 end
 
+afCache = Def.ActorFrame {
+    ModuleCommand=function(self)
+        CacheSpice()
+    end,
+}
 
-af = Def.ActorFrame {
+afWheel = Def.ActorFrame {
     ModuleCommand=function(self)
         CacheSpice()
     end,
@@ -628,29 +648,26 @@ af = Def.ActorFrame {
                 SM("scobility: Recalculating...")
                 CalculatePlayerData(player)
             end
-            if coefs[pn] and song then
-                local scobility_target = EvaluateChartForPlayer(player, song, nil)
-                if scobility_target then
-                    SM(
-                        "scobility: Target " ..
-                        scobility_target["targetEX"] ..
-                        "% EX for +" ..
-                        scobility_target["potentialSP"] ..
-                        " SP, +" ..
-                        scobility_target["potentialEP"] ..
-                        " EP = +" ..
-                        scobility_target["potentialRP"] ..
-                        " RP"
-                    )
-                end
-            end
-            ScobilityInTheSongwheel(player)
+            self:queuecommand("SetupScobilityOnTheMusicWheel")
         end
-	end
+	end,
+	SetupScobilityOnTheMusicWheelCommand=function(self)
+        local a0 = SCREENMAN:GetTopScreen()
+        if not a0 then return end
+        local a1 = a0:GetChild("MusicWheel")
+        if not a1 then return end
+        local a2 = a1:GetChild("MusicWheelItem")
+        if not a2 then return end
+    
+        local songsPresent = {}
+        for i, ai in ipairs(a2) do
+            TweakRelevantMusicWheelItemActors(ai)
+        end
+    end
 }
 
 for player in ivalues(PlayerNumber) do
-    af[#af+1] = Def.ActorFrame {
+    afWheel[#afWheel+1] = Def.ActorFrame {
         PlayerJoinedMessageCommand=function(self)
             self:visible(GAMESTATE:IsPlayerEnabled(player))
             CalculatePlayerData(player)
@@ -663,6 +680,7 @@ for player in ivalues(PlayerNumber) do
     }
 end
 
-t["ScreenSelectMusic"] = af
+t["ScreenTitleMenu"] = afCache
+t["ScreenSelectMusic"] = afWheel
 
 return t
