@@ -4,18 +4,12 @@
 -- Locally caches scobility spice values for the current year of ITL, then
 -- calculates the player's scobility coefficients, target scores, and
 -- potential RP gain based on their local ITL score table.
+-- Each music wheel item for an ITL2025 song that's been played will also be
+-- annotated with the target score and the potential RP gain available from
+-- reaching it.
 --
--- The following changes are made to music select:
--- - The high score box rotation (GS/BS ITG/EX) gets an additional scobility
---   card if the chart currently hovered is present in the current year of
---   ITL. This card contains the following info:
---   - Spice value
---   - Player's current (local) score
---   - Player's target score, as calculated from the spice value
---   - Potential SP, EP, and RP gain, if any are greater than zero
--- - The song wheel item will also be annotated with the potential SP, EP,
---   and RP gain available by achieving the calculated target score.
---
+-- This module targets Zmod 5.6.1+ (it repurposes the EX and points actors in
+-- the music wheel item).
 -- In order to use this module, you will need to update Save\Preferences.ini
 -- so that the HttpAllowHosts line includes an entry for scobility's API,
 -- scobility.azurewebsites.net, and ensure HttpEnabled is set to 1 - e.g.,
@@ -39,7 +33,6 @@
 local t = {}
 
 local year = "2025"
-local spice = {}
 local spiceUpdateInProgress = false
 local spiceUpdateInterval = 3600    -- cache no more often than every hour
 local spiceLastUpdatedRelative = -spiceUpdateInterval
@@ -289,6 +282,7 @@ end
 
 local CalculatePlayerData = function(player)
     if not GAMESTATE:GetCurrentStyle() then return end
+    if not SL.Global.spice then return end
 
     local currentStyle = GAMESTATE:GetCurrentStyle():GetName()
     if currentStyle ~= "double" then currentStyle = "single" end
@@ -325,11 +319,11 @@ local CalculatePlayerData = function(player)
         
         for hash, data in pairs(hashMap) do
             if diffMap[hash] and styleMap[hash] and styleMap[hash] == currentStyle then
-                if spice[hash] then
+                if SL.Global.spice[hash] then
                     spicePoints[#spicePoints+1] = {
-                        ["spice"] = math.log(spice[hash]["spice"]) / math.log(2),
+                        ["spice"] = math.log(SL.Global.spice[hash]["spice"]) / math.log(2),
                         ["quality"] = (
-                            math.log(spice[hash]["spice"]) -
+                            math.log(SL.Global.spice[hash]["spice"]) -
                             math.log(perfectOffset - data["ex"] * 0.0001)
                         ) / math.log(2)
                     }
@@ -395,6 +389,8 @@ local EvaluateScobilityFit = function(player, s)
 end
 
 local EvaluateChartForPlayer = function(player, song, chartHash)
+    if not SL.Global.spice then return nil end
+    
     local pn = ToEnumShortString(player)
     local currentStyle = GAMESTATE:GetCurrentStyle():GetName()
 
@@ -409,11 +405,11 @@ local EvaluateChartForPlayer = function(player, song, chartHash)
         hash = pathMap[songPath]
     end
     if not hash then return nil end
-    if not spice[hash] then return nil end
+    if not SL.Global.spice[hash] then return nil end
     if not diffMap[hash] then return nil end
     if not styleMap[hash] then return nil end
     if styleMap[hash] ~= currentStyle then return nil end
-    local s = math.log(spice[hash]["spice"]) / math.log(2)
+    local s = math.log(SL.Global.spice[hash]["spice"]) / math.log(2)
     local diff = diffMap[hash]
 
     local qualityFit = EvaluateScobilityFit(player, s)
@@ -506,6 +502,7 @@ local ScobilityOnTheMusicWheel = function(self)
     if titleMap[title] then
         local scobilityInfo = EvaluateChartForPlayer(focusPlayer, nil, titleMap[title])
         if scobilityInfo then
+            Trace(TableToString(scobilityInfo))
             Trace(
                 "scobility (" ..
                 PROFILEMAN:GetPlayerName(player) ..
@@ -547,35 +544,17 @@ local TweakRelevantMusicWheelItemActors = function(musicWheelItem)
     local a0b = musicWheelItem:GetChild("SongNormalPart")
     if not a0b then return nil end
     local a0b1 = a0b:GetChild("")
-    result = {
-        ["title"] = a0a1:GetText(),
-    }
-    Trace("### a0b")
-    rec_print_children(a0b)
     for i, ai in ipairs(a0b1) do
-        Trace("### "..tostring(i))
-        rec_print_children(ai)
         if ai then
             local y = ai:GetY()
-            if (y == -7) then
+            if (y == -7) or (y == 7) then
                 if not ai:GetCommand("Scobility") then
                     ai:addcommand("Scobility", ScobilityOnTheMusicWheel)
                     ai:addcommand("Set", ScobilityOnTheMusicWheel)
                 end
-                result["P1"] = ai
-            elseif (y == 7) then
-                if not ai:GetCommand("Scobility") then
-                    ai:addcommand("Scobility", ScobilityOnTheMusicWheel)
-                    ai:addcommand("Set", ScobilityOnTheMusicWheel)
-                end
-                result["P2"] = ai
             end
         end
     end
-    return result
-end
-
-local ScobilityInTheScorebox = function(player)
 end
 
 
@@ -612,16 +591,37 @@ local CacheSpice = function()
                     return
                 end
 
-                spice = body.data
+                SL.Global.spice = body.data
                 spiceLastUpdatedRelative = GetTimeSinceStart()
-                for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-                    CalculatePlayerData(player)
-                end
                 SM("scobility: ITL2025 spice values successfully cached.")
                 spiceUpdateInProgress = false
             end
         end,
     }
+end
+
+local TL = function(x)
+    local n = 0
+    for _ in pairs(x) do n = n + 1 end
+    return n
+end
+
+local Recalculate = function(first)
+    if SL.Global.spice and #SL.Global.spice then
+        for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+            local pn = ToEnumShortString(player)
+            if SL[pn].ITLData["hashMap"] and (TL(SL[pn].ITLData["hashMap"]) >= 5) then
+                if first or not coefs[pn] then
+                    SM("scobility: Recalculating targets for " .. PROFILEMAN:GetPlayerName(player) .. "...")
+                    CalculatePlayerData(player)
+                end
+            else
+                Trace("scobility: Not enough data to calculate targets for " .. PROFILEMAN:GetPlayerName(player))
+            end
+        end
+    else
+        SM("scobility: No spice to recalculate from")
+    end
 end
 
 afCache = Def.ActorFrame {
@@ -634,22 +634,12 @@ afWheel = Def.ActorFrame {
     ModuleCommand=function(self)
         CacheSpice()
     end,
-    InitCommand=function(self)
-        for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-            CalculatePlayerData(player)
-        end
+    OnCommand=function(self)
+        Recalculate(true)
     end,
 	CurrentSongChangedMessageCommand=function(self)
-        local result = ""
-        for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-            local pn = ToEnumShortString(player)
-            local song = GAMESTATE:GetCurrentSong()
-            if #spice and (not coefs[pn]) then
-                SM("scobility: Recalculating...")
-                CalculatePlayerData(player)
-            end
-            self:queuecommand("SetupScobilityOnTheMusicWheel")
-        end
+        Recalculate(false)
+        self:queuecommand("SetupScobilityOnTheMusicWheel")
 	end,
 	SetupScobilityOnTheMusicWheelCommand=function(self)
         local a0 = SCREENMAN:GetTopScreen()
@@ -658,8 +648,6 @@ afWheel = Def.ActorFrame {
         if not a1 then return end
         local a2 = a1:GetChild("MusicWheelItem")
         if not a2 then return end
-    
-        local songsPresent = {}
         for i, ai in ipairs(a2) do
             TweakRelevantMusicWheelItemActors(ai)
         end
