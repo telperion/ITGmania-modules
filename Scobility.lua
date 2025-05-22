@@ -1,5 +1,5 @@
 --[[--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--
--- Scobility in the Songwheel v0.2
+-- Scobility in the Songwheel v0.21
 -- 
 -- Locally caches scobility spice values for the current year of ITL, then
 -- calculates the player's scobility coefficients, target scores, and
@@ -535,6 +535,10 @@ local ScobilityOnTheMusicWheel = function(self)
             else
                 self:settext(potentialRP .. " " .. targetEX)
             end
+            local colorization = 0.4 + math.log10(
+                (scobilityInfo["potentialRP"] > 1) and scobilityInfo["potentialRP"] or 1
+            ) * 0.15
+            self:diffuse(colorization, 0.4, colorization, 1)
             self:visible(true)
             return
         end
