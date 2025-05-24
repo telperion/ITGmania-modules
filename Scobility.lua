@@ -1,5 +1,5 @@
 --[[--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--
--- Scobility in the Songwheel v0.21
+-- Scobility in the Songwheel v0.3
 -- 
 -- Locally caches scobility spice values for the current year of ITL, then
 -- calculates the player's scobility coefficients, target scores, and
@@ -32,6 +32,10 @@
 --||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--||--]]--
 local t = {}
 
+-- vvv Configurables vvv
+local SHOW_ALL_SONGS = true
+-- ^^^ Configurables ^^^
+
 local year = "2025"
 local spiceUpdateInProgress = false
 local spiceUpdateInterval = 3600    -- cache no more often than every hour
@@ -40,6 +44,8 @@ local catalogName = "ITL" .. year
 local groupName = "ITL Online " .. year
 
 -- I wish these were stored themeside by ITL itself
+local superPathMap = {}
+local superHashMap = {}
 local diffMap = {}
 local styleMap = {}
 local titleMap = {}
@@ -296,15 +302,6 @@ local CalculatePlayerData = function(player)
             local songSubPath = arr[3] .. "/" .. arr[4]
             local song = SONGMAN:FindSong(songSubPath)
             if song then
-                for steps in ivalues(song:GetStepsByStepsType("StepsType_Dance_Single")) do
-                    styleMap[hash] = "single"
-                    diffMap[hash] = tonumber(steps:GetMeter())
-                end
-                for steps in ivalues(song:GetStepsByStepsType("StepsType_Dance_Double")) do
-                    styleMap[hash] = "double"
-                    diffMap[hash] = tonumber(steps:GetMeter())
-                end
-                titleMap[song:GetDisplayMainTitle()] = hash
             end
         end
 
@@ -369,13 +366,12 @@ local CalculatePlayerData = function(player)
 end
 
 -- unfortunately "IsItlSong" is already taken :(
-local IsThisSongITL = function(player, song)
+local IsThisSongITL = function(song)
     local songPath = song:GetSongDir()
     local group = string.lower(song:GetGroupName())
-    local pn = ToEnumShortString(player)
-    return (string.find(group, "itl online 2025") or 
-        string.find(group, "itl 2025") or 
-        SL[pn].ITLData["pathMap"][songPath] ~= nil)
+    return (string.find(group, "itl online "..year) or 
+        string.find(group, "itl "..year) or 
+        superPathMap[songPath] ~= nil)
 end
 
 local EvaluateScobilityFit = function(player, s)
@@ -428,8 +424,6 @@ local EvaluateChartForPlayer = function(player, song, chartHash)
     local currentEX = 0
     local currentSP = 0
     local currentEP = 0
-    local targetSP = 0
-    local targetEP = 0
     local potentialSP = 0
     local potentialEP = 0
     if hashMap[hash] and hashMap[hash]["ex"] then
@@ -438,9 +432,9 @@ local EvaluateChartForPlayer = function(player, song, chartHash)
             currentSP = math.floor(hashMap[hash]["passingPoints"] + hashMap[hash]["maxScoringPoints"] * EX2SP(currentEX) * 0.01)
             currentEP = (hashMap[hash]["ex"] == 10000) and 1000 or math.floor(EX2EP(currentEX))
         end
-        targetSP = math.floor(hashMap[hash]["passingPoints"] + hashMap[hash]["maxScoringPoints"] * EX2SP(targetEX) * 0.01)
-        targetEP = (targetEX == 100) and 1000 or math.floor(EX2EP(targetEX))
     end
+    local targetSP = math.floor(superHashMap[hash]["passingPoints"] + superHashMap[hash]["maxScoringPoints"] * EX2SP(targetEX) * 0.01)
+    local targetEP = (targetEX == 100) and 1000 or math.floor(EX2EP(targetEX))
     local contributorsSP = {}
     local contributorsEP = {}
     local floorSP = 1000000
@@ -482,10 +476,10 @@ local EvaluateChartForPlayer = function(player, song, chartHash)
         ["spice"] = math.log(SL.Global.spice[hash]["spice"]) / math.log(2),
         ["quality"] = (
             math.log(SL.Global.spice[hash]["spice"]) -
-            math.log(perfectOffset - hashMap[hash]["ex"] * 0.0001)
+            math.log(perfectOffset - currentEX * 0.01)
         ) / math.log(2),
         ["qualityFit"] = qualityFit,
-        ["currentEX"] = hashMap[hash]["ex"] * 0.01,
+        ["currentEX"] = currentEX,
         ["targetEX"] = targetEX,
         ["floorEPEX"] = floorEPEX,
         ["floorSP"] = floorSP,
@@ -517,7 +511,7 @@ local ScobilityOnTheMusicWheel = function(self)
     end
     local pn = ToEnumShortString(focusPlayer)
 
-    if titleMap[title] and SL[pn].ITLData["hashMap"][titleMap[title]] then
+    if titleMap[title] and (SHOW_ALL_SONGS or SL[pn].ITLData["hashMap"][titleMap[title]]) then
         local scobilityInfo = EvaluateChartForPlayer(focusPlayer, nil, titleMap[title])
         if scobilityInfo then
             if GAMESTATE:GetCurrentSong() and GAMESTATE:GetCurrentSong():GetDisplayMainTitle() == title then
@@ -612,6 +606,52 @@ local CacheSpice = function()
     }
 end
 
+local CachePathMap = function()
+    for _, _ in pairs(superPathMap) do return end
+    SM("scobility: Caching super song path map...")
+
+    for group in ivalues(SONGMAN:GetSongGroupNames()) do
+        local groupLower = string.lower(group)
+        if (string.find(groupLower, "itl online "..year) or
+            string.find(groupLower, "itl "..year)) then
+            for song in ivalues(SONGMAN:GetSongsInGroup(group)) do
+                local songPath = song:GetSongDir()
+                for steps in ivalues(song:GetAllSteps()) do
+                    -- I've been a nasty giiiiiirl, nasty.
+                    SL["P3"] = {["Streams"] = {}}
+                    ParseChartInfo(steps, "P3")
+                    local hash = SL["P3"].Streams.Hash
+                    if hash then
+                        local chartName = steps:GetChartName()
+                    
+                        -- Note that playing OUTSIDE of the ITL pack will result in 0 points for all upscores.
+                        -- Technically this number isn't displayed, but players can opt to swap the EX score in the
+                        -- wheel with this value instead if they prefer.
+                        function ParseNumbers(input)
+                                local num1, num2 = input:match("(%d+)%s+%(P%)%s+%+%s+(%d+)%s+%(S%)")
+                                return tonumber(num1) or nil, tonumber(num2) or nil
+                        end
+                    
+                        local passingPoints, maxScoringPoints = ParseNumbers(chartName)
+
+                        superPathMap[songPath] = hash
+                        superHashMap[hash] = {
+                            ["passingPoints"] = passingPoints,
+                            ["maxScoringPoints"] = maxScoringPoints,
+                        }
+                        titleMap[song:GetDisplayMainTitle()] = hash
+                        styleMap[hash] = (steps:GetStepsType() == "StepsType_Dance_Double") and "double" or "single"
+                        diffMap[hash] = tonumber(steps:GetMeter())
+                    end
+                end
+            end
+        end
+    end
+
+    SM("scobility: Cached super song path map: "..tostring(#superPathMap).." entries")
+    --Trace(TableToString(superPathMap))
+end
+
 local TL = function(x)
     local n = 0
     for _ in pairs(x) do n = n + 1 end
@@ -639,12 +679,14 @@ end
 afCache = Def.ActorFrame {
     ModuleCommand=function(self)
         CacheSpice()
+        CachePathMap()
     end,
 }
 
 afWheel = Def.ActorFrame {
     ModuleCommand=function(self)
         CacheSpice()
+        CachePathMap()
     end,
 	OnCommand=function(self)
         Recalculate(true)
@@ -654,6 +696,10 @@ afWheel = Def.ActorFrame {
         Recalculate(false)
         self:queuecommand("SetupScobilityOnTheMusicWheel")
 	end,
+    NewDownloadsCompletedMessageCommand=function(self)
+        superPathMap = {}
+        CachePathMap()
+    end,
 	SetupScobilityOnTheMusicWheelCommand=function(self)
         local a0 = SCREENMAN:GetTopScreen()
         if not a0 then return end
