@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 
 
 
@@ -23,7 +24,7 @@ class Song:
 	def __init__(self, hsh, path, entry):
 		self.hsh = hsh
 		pathParts = Path(path).parts
-		self.path = '\\'.join(pathParts[-2:])
+		self.path = os.path.sep.join(pathParts[-2:])
 
 		self.clearType = entry['clearType']
 		self.date = entry['date']
@@ -53,9 +54,20 @@ class ITLData:
 	def __init__(self, jsonPath):
 		self.hashes = {}
 		self.paths = {}
+		singlesPattern = re.compile(' \\(S[NEMHX]\\) \\[')
+		doublesPattern = re.compile(' \\(D[NEMHX]\\) \\[')
 		with open(jsonPath) as f:
 			itlData = json.loads(f.read())
 			for path, hsh in itlData['pathMap'].items():
+				if hsh not in itlData['hashMap']:
+					continue
+				singles = re.search(singlesPattern, path)
+				doubles = re.search(doublesPattern, path)
+				if singles == doubles:
+					raise Exception(f"can't determine style (singles/doubles) for {path}")
+				if doubles:
+					print(f'Skipping doubles chart: {path}')
+					continue
 				song = Song(hsh, path, itlData['hashMap'][hsh])
 				self.paths[path] = song
 				self.hashes[hsh] = song

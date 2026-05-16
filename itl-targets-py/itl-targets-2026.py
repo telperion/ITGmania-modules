@@ -35,10 +35,14 @@ for profile in LocalProfiles('C:\\Games\\ITGmania'):
 	print(f'final max-points floor: {mpFloor}')
 
 	scooby.processPlayer(profile.displayName, data)
+	spiceEpCeilings = {rating: (max(song.spice for song in songs) if songs else 0) for rating, songs in data.exTrapezoid.items()}
+
 	allTargets = []
 	targetsByRating = {}
 	for song in data.songs:
 		if song.potentialRP == 0:
+			continue
+		if (song.maxPoints <= mpFloor) and ((song.rating not in spiceEpCeilings) or (song.spice > spiceEpCeilings[song.rating])):
 			continue
 		allTargets.append(song)
 		if song.rating not in targetsByRating:
@@ -46,19 +50,18 @@ for profile in LocalProfiles('C:\\Games\\ITGmania'):
 		targetsByRating[song.rating].append(song)
 
 
-	spiceEpCeilings = {rating: (max(song.spice for song in songs) if songs else 0) for rating, songs in data.exTrapezoid.items()}
-
 	targetsByDate = {}
 	for song in data.songs:
-		if (song.maxPoints > mpFloor) or ((song.rating in spiceEpCeilings) and (song.spice <= spiceEpCeilings[song.rating])):
-			date = song.date
-			if date:
-				passDate = f'Best score from {date[:7]}'
-			else:
-				passDate = 'Never passed'
-			if passDate not in targetsByDate:
-				targetsByDate[passDate] = []
-			targetsByDate[passDate].append(song)
+		if (song.maxPoints <= mpFloor) and ((song.rating not in spiceEpCeilings) or (song.spice > spiceEpCeilings[song.rating])):
+			continue
+		date = song.date
+		if date:
+			passDate = f'Best score from {date[:7]}'
+		else:
+			passDate = 'Never passed'
+		if passDate not in targetsByDate:
+			targetsByDate[passDate] = []
+		targetsByDate[passDate].append(song)
 
 	playlistLines = []
 	playlistLines.append("---All +RP")
