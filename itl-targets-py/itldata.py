@@ -64,7 +64,8 @@ class ITLData:
 				singles = re.search(singlesPattern, path)
 				doubles = re.search(doublesPattern, path)
 				if singles == doubles:
-					raise Exception(f"can't determine style (singles/doubles) for {path}")
+					print(f"can't determine style (singles/doubles) for {path}")
+					continue
 				if doubles:
 					print(f'Skipping doubles chart: {path}')
 					continue
