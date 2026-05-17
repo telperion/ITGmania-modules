@@ -36,7 +36,7 @@ local t = {}
 local SHOW_ALL_SONGS = true
 -- ^^^ Configurables ^^^
 
-local year = "2025"
+local year = "2026"
 local spiceUpdateInProgress = false
 local spiceUpdateInterval = 3600    -- cache no more often than every hour
 local spiceLastUpdatedRelative = -spiceUpdateInterval
@@ -60,10 +60,10 @@ local handSP = {
 }
 local handEP = {
     ["single"] = {
-        [7] = 1,
-        [8] = 2,
-        [9] = 3,
-        [10] = 4,
+        [7] = 5,
+        [8] = 5,
+        [9] = 5,
+        [10] = 5,
         [11] = 5,
         [12] = 4,
         [13] = 3,
